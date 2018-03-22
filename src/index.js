@@ -94,22 +94,12 @@ const parsers = {
 
 const options = {
   // format based on https://github.com/prettier/prettier/blob/master/src/common/support.js
-  pythonVersion: {
+  pythonBin: {
     since: "0.0.0-development", // FIXME: Fix this before releasing.
     category: "Python",
-    type: "choice",
-    default: "3",
-    description: "Which version of Python the code is written for",
-    choices: [
-      {
-        value: "2",
-        description: "Python 2"
-      },
-      {
-        value: "3",
-        description: "Python 3"
-      }
-    ]
+    type: "path",
+    default: "python",
+    description: "The python interpreter to use to parse the Python code",
   }
 };
 

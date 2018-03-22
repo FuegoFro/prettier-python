@@ -1,14 +1,61 @@
 "use strict";
 
+const spawnSync = require("child_process").spawnSync;
 const fs = require("fs");
 const extname = require("path").extname;
 const prettier = require("prettier");
 const massageAST = require("prettier/src/common/clean-ast").massageAST;
 const normalizeOptions = require("prettier/src/main/options").normalize;
+const semver = require("semver");
 
-const AST_COMPARE = process.env["AST_COMPARE"];
+const AST_COMPARE = process.env.AST_COMPARE;
 
-function run_spec(dirname, parsers, options) {
+function getPythonBinAndVersion(potentialBins, versionSpec) {
+  for (let i = 0; i < potentialBins.length; i++) {
+    let bin = potentialBins[i];
+
+    const proc = spawnSync(bin, ["-c", "import platform; print(platform.python_version())"]);
+    if (proc.status !== 0) {
+      continue;
+    }
+    const version = proc.stdout.toString().trim();
+
+    if (version !== null && semver.satisfies(version, versionSpec)) {
+      return [bin, version];
+    }
+  }
+
+  return null;
+}
+
+const python2BinAndVersion = getPythonBinAndVersion(["python2.7", "python2", "python"], "2.*");
+const python3BinAndVersion = getPythonBinAndVersion(["python3.6", "python3", "python"], "3.*");
+
+function getPythonBinaries(versionSpec) {
+  // Try to find a python2 and python3 binary
+  let pythonBinaries = [];
+  [python2BinAndVersion, python3BinAndVersion].forEach((binAndVersion) => {
+    if (binAndVersion !== null) {
+      const [bin, version] = binAndVersion;
+      if (semver.satisfies(version, versionSpec)) {
+        pythonBinaries.push(bin);
+      }
+    }
+  });
+
+  test("At least one valid Python version", () => {
+    expect(pythonBinaries.length).toBeGreaterThan(0);
+  });
+  if (versionSpec === "*") {
+    test("Both Python versions available", () => {
+      expect(pythonBinaries.length).toEqual(2);
+    });
+  }
+
+  return pythonBinaries;
+}
+
+function run_spec(dirname, parsers, versionRange, options) {
   options = Object.assign(
     {
       plugins: ["."]
@@ -31,50 +78,53 @@ function run_spec(dirname, parsers, options) {
     ) {
       const source = read(path).replace(/\r\n/g, "\n");
 
-      const mergedOptions = Object.assign({}, options, {
-        parser: parsers[0]
-      });
-      const output = prettyprint(source, path, mergedOptions);
-      test(`${filename} - ${mergedOptions.parser}-verify`, () => {
-        expect(raw(source + "~".repeat(80) + "\n" + output)).toMatchSnapshot(
-          filename
-        );
-      });
-
-      parsers.slice(1).forEach(parserName => {
-        test(`${filename} - ${parserName}-verify`, () => {
-          const verifyOptions = Object.assign(mergedOptions, {
-            parser: parserName
-          });
-          const verifyOutput = prettyprint(source, path, verifyOptions);
-          expect(output).toEqual(verifyOutput);
+      getPythonBinaries(versionRange).forEach((pythonBin) => {
+        const mergedOptions = Object.assign({}, options, {
+          parser: parsers[0],
+          pythonBin: pythonBin
         });
-      });
-
-      if (AST_COMPARE) {
-        const ast = parse(source, mergedOptions);
-        const normalizedOptions = normalizeOptions(mergedOptions);
-        const astMassaged = massageAST(ast, normalizedOptions);
-        let ppastMassaged;
-        let pperr = null;
-        try {
-          const ppast = parse(
-            prettyprint(source, path, mergedOptions),
-            mergedOptions
+        const output = prettyprint(source, path, mergedOptions);
+        test(`${filename} - ${mergedOptions.parser}-verify`, () => {
+          expect(raw(source + "~".repeat(80) + "\n" + output)).toMatchSnapshot(
+            filename
           );
-          ppastMassaged = massageAST(ppast, normalizedOptions);
-        } catch (e) {
-          pperr = e.stack;
-        }
-
-        test(path + " parse", () => {
-          expect(pperr).toBe(null);
-          expect(ppastMassaged).toBeDefined();
-          if (!ast.errors || ast.errors.length === 0) {
-            expect(astMassaged).toEqual(ppastMassaged);
-          }
         });
-      }
+
+        parsers.slice(1).forEach(parserName => {
+          test(`${filename} - ${parserName}-verify`, () => {
+            const verifyOptions = Object.assign(mergedOptions, {
+              parser: parserName
+            });
+            const verifyOutput = prettyprint(source, path, verifyOptions);
+            expect(output).toEqual(verifyOutput);
+          });
+        });
+
+        if (AST_COMPARE) {
+          const ast = parse(source, mergedOptions);
+          const normalizedOptions = normalizeOptions(mergedOptions);
+          const astMassaged = massageAST(ast, normalizedOptions);
+          let ppastMassaged;
+          let pperr = null;
+          try {
+            const ppast = parse(
+              prettyprint(source, path, mergedOptions),
+              mergedOptions
+            );
+            ppastMassaged = massageAST(ppast, normalizedOptions);
+          } catch (e) {
+            pperr = e.stack;
+          }
+
+          test(path + " parse", () => {
+            expect(pperr).toBe(null);
+            expect(ppastMassaged).toBeDefined();
+            if (!ast.errors || ast.errors.length === 0) {
+              expect(astMassaged).toEqual(ppastMassaged);
+            }
+          });
+        }
+      });
     }
   });
 }

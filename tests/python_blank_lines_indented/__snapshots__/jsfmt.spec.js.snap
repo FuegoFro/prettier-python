@@ -78,7 +78,6 @@ def f():
 
 `;
 
-
 exports[`blank_lines_indented.py 2`] = `
 def f():
     a = 1
